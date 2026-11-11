@@ -13,14 +13,14 @@
   /* Layout: encabezado con filtros; indicadores de semáforo; mapa + panel de restricciones; gráfico y tabla */
   :root {
     --bg: #f5f6f4; --panel: #ffffff; --fg: #1b2320; --muted: #5c6a65; --line: #dde3e0; --accent: #8a3b12;
-    --verde: #2e8b57; --amarillo: #e0a100; --rojo: #d64545; --azul: #2f6fd6; --gris: #9aa5a1; --yo: #7a3db8;
+    --verde: #2e8b57; --amarillo: #e0a100; --rojo: #d64545; --azul: #2f6fd6; --gris: #9aa5a1; --yo: #7a3db8; --sr: #cdd3d0;
     /* Estados de liberación */
     --e-sin: #c0392b; --e-nv: #5b5f97; --e-rev: #e67e22; --e-lib: #27ae60; --e-libre: #16a085; --e-ej: #1f5fbf; --e-otro: #9aa5a1;
     --sans: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #111513; --panel: #19201d; --fg: #e7ede9; --muted: #9db0a9; --line: #2a3531; --accent: #f08a4b; --gris: #6f7b77; color-scheme: dark; }
+    :root { --bg: #111513; --panel: #19201d; --fg: #e7ede9; --muted: #9db0a9; --line: #2a3531; --accent: #f08a4b; --gris: #6f7b77; --sr: #3d4844; color-scheme: dark; }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); }
@@ -278,6 +278,11 @@
       t.vencida = !['VERDE', 'AZUL'].includes(t.sem) && t.dias != null && t.dias < 0;
       out.push(t);
     }
+    // Tabla resumen de la matriz (columnas AE–AF: «TRAMOS» y «LONGITUD (m)»): longitud contractual por tramo
+    const contr = {};
+    const hc = R.findIndex((r) => limpio(r[30]).toUpperCase() === 'TRAMOS');
+    if (hc >= 0) for (const r of R.slice(hc + 1)) { const m = limpio(r[30]).toUpperCase().match(/TRAMO\s*(\d+)/); const v = num(r[31]); if (m && v != null && v > 0) contr[+m[1]] = v; }
+    out.contr = contr;
     return out;
   }
 
@@ -306,6 +311,12 @@
     const t = TR.find((t) => t.tramo_num === n && t.ai != null && p.abscisa_m >= t.ai && p.abscisa_m <= t.af);
     p.t = t || null; p.sem = t ? t.sem : 'SIN DATO'; p.tramo_num = n;
   });
+
+  // ---------- longitud contractual ----------
+  const CONTR = TR.contr || {};
+  const regTramo = (n) => TR.filter((t) => t.tramo_num === n).reduce((a, t) => a + (t.long || 0), 0);
+  const contrTramo = (n) => CONTR[n] ?? regTramo(n);
+  const LIBRES = ['LIBERADO EN EJECUCION', 'EJECUTADO', 'LIBERADO'];
 
   // ---------- filtros ----------
   const F = { tramo: 'ALL', resp: 'ALL', estado: 'ALL', sem: null };
@@ -472,10 +483,17 @@
     const enEst = MODO === 'est';
     const ts = TR.filter((t) => (enEst ? pasa(t, true, false) : pasa(t, false)));
     const largo = (arr) => arr.reduce((a, t) => a + (t.long || 0), 0);
-    const total = largo(ts);
-    const tarjeta = (k) => { const x = ts.filter((t) => catDe(t) === k); const on = enEst ? F.estado === k : F.sem === k; return `<button class="kpi" data-k="${esc(k)}" aria-pressed="${on}" style="--c:${colCat(k)}"><div class="l">${esc(etCat(k))}</div><div class="v">${x.length}</div><div class="s">${fm.format(largo(x))} m · ${total ? Math.round((largo(x) / total) * 100) : 0} %</div></button>`; };
+    // Base: longitud contractual de los tramos seleccionados (tabla resumen de la matriz)
+    const nums = F.tramo === 'ALL' ? [...new Set(TR.map((t) => t.tramo_num).filter((n) => n != null))] : [+F.tramo];
+    const contr = nums.reduce((a, n) => a + contrTramo(n), 0);
+    const reg = nums.reduce((a, n) => a + regTramo(n), 0);
+    const pc = (m) => (contr ? f1.format(Math.round((m / contr) * 1000) / 10) : '0');
+    const tarjeta = (k) => { const x = ts.filter((t) => catDe(t) === k); const on = enEst ? F.estado === k : F.sem === k; return `<button class="kpi" data-k="${esc(k)}" aria-pressed="${on}" style="--c:${colCat(k)}"><div class="l">${esc(etCat(k))}</div><div class="v">${x.length}</div><div class="s">${fm.format(largo(x))} m · ${pc(largo(x))} % del contrato</div></button>`; };
     const venc = ts.filter((t) => t.vencida).length, prox = ts.filter((t) => !['VERDE', 'AZUL'].includes(t.sem) && t.dias != null && t.dias >= 0 && t.dias <= 15).length;
-    document.getElementById('kpis').innerHTML = (enEst ? cats() : ['ROJO', 'AMARILLO', 'VERDE', 'AZUL']).map(tarjeta).join('') +
+    const difer = reg - contr;
+    document.getElementById('kpis').innerHTML =
+      `<div class="kpi" style="--c:var(--accent);cursor:default"><div class="l">Longitud contractual</div><div class="v">${fm.format(contr)}</div><div class="s">Registrado en la matriz: ${fm.format(reg)} m${difer < -0.5 ? ` · sin registrar: ${fm.format(-difer)} m` : difer > 0.5 ? ` · <span class="venc">registrado de más: ${fm.format(difer)} m</span>` : ''}</div></div>` +
+      (enEst ? cats() : ['ROJO', 'AMARILLO', 'VERDE', 'AZUL']).map(tarjeta).join('') +
       `<div class="kpi" style="--c:var(--rojo);cursor:default"><div class="l">Compromisos vencidos</div><div class="v ${venc ? 'venc' : ''}">${venc}</div><div class="s">${prox} vencen en los próximos 15 días</div></div>`;
     document.querySelectorAll('.kpi[data-k]').forEach((b) => b.addEventListener('click', () => {
       const k = b.dataset.k;
@@ -484,7 +502,8 @@
     }));
     const tl = TR.filter((t) => pasa(t, false));
     const rojo = tl.filter((t) => t.sem === 'ROJO');
-    document.getElementById('lede').innerHTML = `${F.tramo === 'ALL' ? 'En todos los tramos' : 'En ' + esc(nombresTramo.get(+F.tramo))}${F.estado === 'ALL' ? '' : ', con estado <b>' + esc(etEst(F.estado).toLowerCase()) + '</b>,'} hay <b>${rojo.length} tramos en rojo</b> (${fm.format(largo(rojo))} m) y <b>${tl.filter((t) => t.sem === 'AMARILLO').length} en amarillo</b>, de ${tl.length} registrados en la matriz` + (venc ? `; <b class="venc">${venc} compromisos vencidos</b>.` : '.');
+    document.getElementById('lede').innerHTML = `${F.tramo === 'ALL' ? 'En todos los tramos' : 'En ' + esc(nombresTramo.get(+F.tramo))}${F.estado === 'ALL' ? '' : ', con estado <b>' + esc(etEst(F.estado).toLowerCase()) + '</b>,'} hay <b>${rojo.length} tramos en rojo</b> (${fm.format(largo(rojo))} m) y <b>${tl.filter((t) => t.sem === 'AMARILLO').length} en amarillo</b>, de ${tl.length} registrados en la matriz` + (venc ? `; <b class="venc">${venc} compromisos vencidos</b>.` : '.') +
+      ` Sobre la longitud contractual (${fm.format(contr)} m), lo liberado o ejecutado suma <b>${fm.format(largo(TR.filter((t) => nums.includes(t.tramo_num) && LIBRES.includes(t.estado))))} m</b> (${pc(largo(TR.filter((t) => nums.includes(t.tramo_num) && LIBRES.includes(t.estado))))} %).`;
   }
 
   // ---------- lista de restricciones ----------
@@ -507,13 +526,17 @@
     const grupos = [...nombresTramo.keys()].sort((a, b) => a - b).map((n) => {
       const ts = TR.filter((t) => t.tramo_num === n && (F.resp === 'ALL' || t.responsable === F.resp) && (F.estado === 'ALL' || t.estado === F.estado));
       const por = Object.fromEntries(cats().map((s) => [s, ts.filter((t) => catDe(t) === s).reduce((a, t) => a + (t.long || 0), 0)]));
-      return { n, total: Object.values(por).reduce((a, b) => a + b, 0), por, cuenta: ts.length };
+      const total = Object.values(por).reduce((a, b) => a + b, 0), contr = contrTramo(n), regT = regTramo(n);
+      const sinFiltro = F.estado === 'ALL' && F.resp === 'ALL';
+      const sinReg = sinFiltro ? Math.max(0, contr - regT) : 0;
+      return { n, total, por, cuenta: ts.length, contr, regT, sinReg, exceso: Math.max(0, regT - contr), base: Math.max(contr, total + sinReg) };
     }).filter((g) => g.cuenta);
-    const max = Math.max(1, ...grupos.map((g) => g.total));
-    document.getElementById('tituloBarras').textContent = MODO === 'sem' ? 'Longitud por tramo y semáforo' : 'Longitud por tramo y estado de liberación';
-    document.getElementById('subBarras').innerHTML = `Metros de cada tramo según ${MODO === 'sem' ? 'el semáforo' : 'el estado de liberación'} de la matriz. Toque una barra para filtrar. <span class="legend" style="display:inline-flex;margin-left:6px">${cats().map((s) => `<span><i style="background:${colCat(s)}"></i>${esc(etCat(s))}</span>`).join('')}</span>`;
+    const max = Math.max(1, ...grupos.map((g) => g.base));
+    const srCol = css.getPropertyValue('--sr').trim();
+    document.getElementById('tituloBarras').textContent = MODO === 'sem' ? 'Longitud contractual por tramo y semáforo' : 'Longitud contractual por tramo y estado de liberación';
+    document.getElementById('subBarras').innerHTML = `Cada barra es la longitud contractual del tramo (cifra a la derecha, de la tabla resumen de la matriz). Toque una barra para filtrar. <span class="legend" style="display:inline-flex;margin-left:6px">${cats().map((s) => `<span><i style="background:${colCat(s)}"></i>${esc(etCat(s))}</span>`).join('')}<span><i style="background:${srCol}"></i>Sin registrar en la matriz</span></span>`;
     const el = document.getElementById('bars');
-    el.innerHTML = grupos.map((g) => `<div class="bar ${String(g.n) === F.tramo ? 'on' : ''}" data-n="${g.n}"><span class="n" title="${esc(nombresTramo.get(g.n))}">${esc(nombresTramo.get(g.n))}</span><span class="tk" style="width:${Math.max(2, (g.total / max) * 100)}%">${cats().map((s) => g.por[s] ? `<i title="${esc(etCat(s))}: ${fm.format(g.por[s])} m" style="width:${(g.por[s] / g.total) * 100}%;background:${colCat(s)}"></i>` : '').join('')}</span><span class="x">${g.total ? fm.format(g.total) + ' m' : g.cuenta + ' reg.'}</span></div>`).join('');
+    el.innerHTML = grupos.map((g) => `<div class="bar ${String(g.n) === F.tramo ? 'on' : ''}" data-n="${g.n}" title="${esc(nombresTramo.get(g.n))}: ${fm.format(g.regT)} m registrados de ${fm.format(g.contr)} m contractuales"><span class="n">${esc(nombresTramo.get(g.n))}</span><span class="tk" style="width:${Math.max(2, (g.base / max) * 100)}%">${cats().map((s) => g.por[s] ? `<i title="${esc(etCat(s))}: ${fm.format(g.por[s])} m (${g.contr ? f1.format(Math.round((g.por[s] / g.contr) * 1000) / 10) : 0} % del contrato)" style="width:${(g.por[s] / g.base) * 100}%;background:${colCat(s)}"></i>` : '').join('')}${g.sinReg > 0.5 ? `<i title="Sin registrar en la matriz: ${fm.format(g.sinReg)} m" style="width:${(g.sinReg / g.base) * 100}%;background:${srCol}"></i>` : ''}</span><span class="x">${g.contr ? fm.format(g.contr) + ' m' : g.cuenta + ' reg.'}${g.exceso > 0.5 ? ` <span class="venc" title="Lo registrado en la matriz supera la longitud contractual">+${fm.format(g.exceso)}</span>` : ''}</span></div>`).join('');
     el.querySelectorAll('.bar').forEach((b) => b.addEventListener('click', () => { F.tramo = F.tramo === b.dataset.n ? 'ALL' : b.dataset.n; selT.value = F.tramo; actualizar(true); }));
   }
 
