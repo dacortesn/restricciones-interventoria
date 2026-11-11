@@ -14,6 +14,8 @@
   :root {
     --bg: #f5f6f4; --panel: #ffffff; --fg: #1b2320; --muted: #5c6a65; --line: #dde3e0; --accent: #8a3b12;
     --verde: #2e8b57; --amarillo: #e0a100; --rojo: #d64545; --azul: #2f6fd6; --gris: #9aa5a1; --yo: #7a3db8;
+    /* Estados de liberación */
+    --e-sin: #c0392b; --e-nv: #5b5f97; --e-rev: #e67e22; --e-lib: #27ae60; --e-libre: #16a085; --e-ej: #1f5fbf; --e-otro: #9aa5a1;
     --sans: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
     color-scheme: light;
   }
@@ -51,6 +53,8 @@
   .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .modo { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .modo select { min-width: 0; padding: 5px 8px; font-weight: 500; }
   .legend i.eje { height: 0; border-top: 2px dashed var(--muted); width: 18px; border-radius: 0; }
   .legend i.yo { border-radius: 50%; background: var(--yo); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yo) 30%, transparent); }
   #map { height: min(70vh, 660px); min-height: 380px; background: #dde3e0; }
@@ -128,6 +132,12 @@
   <div class="layout">
     <section class="card">
       <div class="maphead">
+        <label class="modo" for="selModo">Mapa
+          <select id="selModo">
+            <option value="sem">1. Semáforo</option>
+            <option value="est">2. Estado de liberación</option>
+          </select>
+        </label>
         <div class="legend" id="legend"></div>
         <div class="legend"><span><i class="eje"></i>Eje del proyecto</span><span><i class="yo"></i>Mi ubicación</span></div>
       </div>
@@ -146,8 +156,8 @@
   </div>
 
   <section class="card cardpad blk">
-    <h2>Longitud por tramo y semáforo</h2>
-    <p class="sub">Metros de cada tramo según el semáforo de la matriz. Toque una barra para filtrar.</p>
+    <h2 id="tituloBarras">Longitud por tramo y semáforo</h2>
+    <p class="sub" id="subBarras">Metros de cada tramo según el semáforo de la matriz. Toque una barra para filtrar.</p>
     <div class="bars" id="bars"></div>
   </section>
 
@@ -315,10 +325,21 @@
   selT.addEventListener('change', () => { F.tramo = selT.value; actualizar(true); });
   selR.addEventListener('change', () => { F.resp = selR.value; actualizar(true); });
   selE.addEventListener('change', () => { F.estado = selE.value; actualizar(true); });
-  const pasa = (t, conSem = true) => (F.tramo === 'ALL' || String(t.tramo_num) === F.tramo) && (F.resp === 'ALL' || t.responsable === F.resp) && (F.estado === 'ALL' || t.estado === F.estado) && (!conSem || !F.sem || t.sem === F.sem);
+  const pasa = (t, conSem = true, conEst = true) => (F.tramo === 'ALL' || String(t.tramo_num) === F.tramo) && (F.resp === 'ALL' || t.responsable === F.resp) && (!conEst || F.estado === 'ALL' || t.estado === F.estado) && (!conSem || !F.sem || t.sem === F.sem);
+
+  // ---------- modo del mapa: 1. Semáforo · 2. Estado de liberación ----------
+  let MODO = 'sem';
+  const CLAVE_EST = { 'SIN LIBERAR': 'sin', 'NO VIABLE': 'nv', 'EN REVISION': 'rev', 'LIBERADO EN EJECUCION': 'lib', 'LIBERADO': 'libre', 'EJECUTADO': 'ej' };
+  const colEst = (e) => css.getPropertyValue('--e-' + (CLAVE_EST[e] || 'otro')).trim();
+  const catDe = (t) => (MODO === 'sem' ? t.sem : t.estado || 'SIN ESTADO');
+  const cats = () => (MODO === 'sem' ? SEM : [...ORDEN_EST.filter((e) => cuentaEst.has(e)), ...[...cuentaEst.keys()].filter((e) => !ORDEN_EST.includes(e))]);
+  const colCat = (c) => (MODO === 'sem' ? COL(c) : colEst(c));
+  const etCat = (c) => (MODO === 'sem' ? SEM_ET[c] : etEst(c));
+  try { const m = new URLSearchParams(location.search).get('mapa'); if (m === 'estado') MODO = 'est'; } catch (e) {}
+  const selM = document.getElementById('selModo'); selM.value = MODO;
 
   // ---------- mapa ----------
-  document.getElementById('legend').innerHTML = SEM.map((s) => `<span><i style="background:${COL(s)}"></i>${SEM_ET[s]}</span>`).join('');
+  const leyenda = () => { document.getElementById('legend').innerHTML = cats().map((s) => `<span><i style="background:${colCat(s)}"></i>${esc(etCat(s))}</span>`).join(''); };
   const map = L.map('map', { preferCanvas: true }).setView([4.76, -74.2], 11);
   const base = {
     'Calles (OpenStreetMap)': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© OpenStreetMap' }),
@@ -339,6 +360,16 @@
   });
   TR.filter((t) => t.geom).forEach((t) => {
     t._l = L.polyline(ll(t.geom), { color: COL(t.sem), weight: t.vencida ? 9 : 6, opacity: .95, lineCap: 'round', dashArray: t.vencida ? '2 10' : null }).bindPopup(() => popTramo(t), { maxWidth: 380 });
+  });
+  function colorear() {
+    PR.forEach((p) => { const c = p.t ? colCat(catDe(p.t)) : COL('SIN DATO'); p._l.setStyle({ color: c, fillColor: c }); });
+    TR.forEach((t) => { if (t._l) t._l.setStyle({ color: colCat(catDe(t)) }); });
+    leyenda();
+  }
+  selM.addEventListener('change', () => {
+    MODO = selM.value;
+    try { const u = new URL(location.href); if (MODO === 'est') u.searchParams.set('mapa', 'estado'); else u.searchParams.delete('mapa'); history.replaceState(null, '', u); } catch (e) {}
+    colorear(); actualizar(false);
   });
   function dibujarMapa(encuadrar) {
     gEjes.clearLayers(); gPred.clearLayers(); gTr.clearLayers();
@@ -415,25 +446,31 @@
 
   // ---------- indicadores ----------
   function kpis() {
-    const ts = TR.filter((t) => pasa(t, false));
+    const enEst = MODO === 'est';
+    const ts = TR.filter((t) => (enEst ? pasa(t, true, false) : pasa(t, false)));
     const largo = (arr) => arr.reduce((a, t) => a + (t.long || 0), 0);
     const total = largo(ts);
-    const tarjeta = (s, etiqueta) => { const x = ts.filter((t) => t.sem === s); return `<button class="kpi" data-sem="${s}" aria-pressed="${F.sem === s}" style="--c:${COL(s)}"><div class="l">${etiqueta}</div><div class="v">${x.length}</div><div class="s">${fm.format(largo(x))} m · ${total ? Math.round((largo(x) / total) * 100) : 0} %</div></button>`; };
+    const tarjeta = (k) => { const x = ts.filter((t) => catDe(t) === k); const on = enEst ? F.estado === k : F.sem === k; return `<button class="kpi" data-k="${esc(k)}" aria-pressed="${on}" style="--c:${colCat(k)}"><div class="l">${esc(etCat(k))}</div><div class="v">${x.length}</div><div class="s">${fm.format(largo(x))} m · ${total ? Math.round((largo(x) / total) * 100) : 0} %</div></button>`; };
     const venc = ts.filter((t) => t.vencida).length, prox = ts.filter((t) => !['VERDE', 'AZUL'].includes(t.sem) && t.dias != null && t.dias >= 0 && t.dias <= 15).length;
-    document.getElementById('kpis').innerHTML = tarjeta('ROJO', 'Rojo') + tarjeta('AMARILLO', 'Amarillo') + tarjeta('VERDE', 'Verde') + tarjeta('AZUL', 'Azul') +
+    document.getElementById('kpis').innerHTML = (enEst ? cats() : ['ROJO', 'AMARILLO', 'VERDE', 'AZUL']).map(tarjeta).join('') +
       `<div class="kpi" style="--c:var(--rojo);cursor:default"><div class="l">Compromisos vencidos</div><div class="v ${venc ? 'venc' : ''}">${venc}</div><div class="s">${prox} vencen en los próximos 15 días</div></div>`;
-    document.querySelectorAll('.kpi[data-sem]').forEach((b) => b.addEventListener('click', () => { F.sem = F.sem === b.dataset.sem ? null : b.dataset.sem; actualizar(false); }));
-    const rojo = ts.filter((t) => t.sem === 'ROJO');
-    document.getElementById('lede').innerHTML = `${F.tramo === 'ALL' ? 'En todos los tramos' : 'En ' + esc(nombresTramo.get(+F.tramo))}${F.estado === 'ALL' ? '' : ', con estado <b>' + esc(etEst(F.estado).toLowerCase()) + '</b>,'} hay <b>${rojo.length} tramos en rojo</b> (${fm.format(largo(rojo))} m) y <b>${ts.filter((t) => t.sem === 'AMARILLO').length} en amarillo</b>, de ${ts.length} registrados en la matriz` + (venc ? `; <b class="venc">${venc} compromisos vencidos</b>.` : '.');
+    document.querySelectorAll('.kpi[data-k]').forEach((b) => b.addEventListener('click', () => {
+      const k = b.dataset.k;
+      if (enEst) { F.estado = F.estado === k ? 'ALL' : k; selE.value = F.estado; actualizar(true); }
+      else { F.sem = F.sem === k ? null : k; actualizar(false); }
+    }));
+    const tl = TR.filter((t) => pasa(t, false));
+    const rojo = tl.filter((t) => t.sem === 'ROJO');
+    document.getElementById('lede').innerHTML = `${F.tramo === 'ALL' ? 'En todos los tramos' : 'En ' + esc(nombresTramo.get(+F.tramo))}${F.estado === 'ALL' ? '' : ', con estado <b>' + esc(etEst(F.estado).toLowerCase()) + '</b>,'} hay <b>${rojo.length} tramos en rojo</b> (${fm.format(largo(rojo))} m) y <b>${tl.filter((t) => t.sem === 'AMARILLO').length} en amarillo</b>, de ${tl.length} registrados en la matriz` + (venc ? `; <b class="venc">${venc} compromisos vencidos</b>.` : '.');
   }
 
   // ---------- lista de restricciones ----------
   function lista() {
     const xs = TR.filter((t) => t.activa && pasa(t)).sort((a, b) => (b.vencida - a.vencida) || ((a.dias ?? 1e9) - (b.dias ?? 1e9)) || SEM.indexOf(a.sem) - SEM.indexOf(b.sem));
     const el = document.getElementById('lista');
-    el.innerHTML = xs.length ? xs.map((t) => `<div class="item" data-id="${esc(t.id)}" style="--c:${COL(t.sem)}" tabindex="0" role="button">
+    el.innerHTML = xs.length ? xs.map((t) => `<div class="item" data-id="${esc(t.id)}" style="--c:${colCat(catDe(t))}" tabindex="0" role="button">
         <div class="t">${esc(t.tramo)}${t.rt ? ' · ' + esc(t.rt) : ''}</div>
-        <div class="m">${esc(t.abscisas)} · ${dot(t.sem)}${t.vencida ? ' · <span class="venc">vencido</span>' : ''}</div>
+        <div class="m">${esc(t.abscisas)} · ${dot(t.sem)} · ${esc(etEst(t.estado))}${t.vencida ? ' · <span class="venc">vencido</span>' : ''}</div>
         ${t.restriccion ? `<div class="r"><b>Restricción:</b> ${esc(t.restriccion)}</div>` : ''}
         ${t.accion ? `<div class="r"><b>Acción:</b> ${esc(t.accion)}</div>` : ''}
         ${t.responsable || t.fcomp ? `<div class="r"><b>Responsable:</b> ${esc(t.responsable || '—')}${t.fcomp ? ' · <b>Compromiso:</b> ' + esc(t.fcomp) + (t.dias != null ? ` (${t.dias} d)` : '') : ''}</div>` : ''}
@@ -446,12 +483,14 @@
   function barras() {
     const grupos = [...nombresTramo.keys()].sort((a, b) => a - b).map((n) => {
       const ts = TR.filter((t) => t.tramo_num === n && (F.resp === 'ALL' || t.responsable === F.resp) && (F.estado === 'ALL' || t.estado === F.estado));
-      const por = Object.fromEntries(SEM.map((s) => [s, ts.filter((t) => t.sem === s).reduce((a, t) => a + (t.long || 0), 0)]));
+      const por = Object.fromEntries(cats().map((s) => [s, ts.filter((t) => catDe(t) === s).reduce((a, t) => a + (t.long || 0), 0)]));
       return { n, total: Object.values(por).reduce((a, b) => a + b, 0), por, cuenta: ts.length };
     }).filter((g) => g.cuenta);
     const max = Math.max(1, ...grupos.map((g) => g.total));
+    document.getElementById('tituloBarras').textContent = MODO === 'sem' ? 'Longitud por tramo y semáforo' : 'Longitud por tramo y estado de liberación';
+    document.getElementById('subBarras').innerHTML = `Metros de cada tramo según ${MODO === 'sem' ? 'el semáforo' : 'el estado de liberación'} de la matriz. Toque una barra para filtrar. <span class="legend" style="display:inline-flex;margin-left:6px">${cats().map((s) => `<span><i style="background:${colCat(s)}"></i>${esc(etCat(s))}</span>`).join('')}</span>`;
     const el = document.getElementById('bars');
-    el.innerHTML = grupos.map((g) => `<div class="bar ${String(g.n) === F.tramo ? 'on' : ''}" data-n="${g.n}"><span class="n" title="${esc(nombresTramo.get(g.n))}">${esc(nombresTramo.get(g.n))}</span><span class="tk" style="width:${Math.max(2, (g.total / max) * 100)}%">${SEM.map((s) => g.por[s] ? `<i title="${SEM_ET[s]}: ${fm.format(g.por[s])} m" style="width:${(g.por[s] / g.total) * 100}%;background:${COL(s)}"></i>` : '').join('')}</span><span class="x">${g.total ? fm.format(g.total) + ' m' : g.cuenta + ' reg.'}</span></div>`).join('');
+    el.innerHTML = grupos.map((g) => `<div class="bar ${String(g.n) === F.tramo ? 'on' : ''}" data-n="${g.n}"><span class="n" title="${esc(nombresTramo.get(g.n))}">${esc(nombresTramo.get(g.n))}</span><span class="tk" style="width:${Math.max(2, (g.total / max) * 100)}%">${cats().map((s) => g.por[s] ? `<i title="${esc(etCat(s))}: ${fm.format(g.por[s])} m" style="width:${(g.por[s] / g.total) * 100}%;background:${colCat(s)}"></i>` : '').join('')}</span><span class="x">${g.total ? fm.format(g.total) + ' m' : g.cuenta + ' reg.'}</span></div>`).join('');
     el.querySelectorAll('.bar').forEach((b) => b.addEventListener('click', () => { F.tramo = F.tramo === b.dataset.n ? 'ALL' : b.dataset.n; selT.value = F.tramo; actualizar(true); }));
   }
 
@@ -471,6 +510,7 @@
     try { history.replaceState(null, '', F.tramo === 'ALL' ? location.pathname + location.search : '#T' + F.tramo); } catch (e) {}
     kpis(); lista(); barras(); tabla(); dibujarMapa(encuadrar);
   }
+  colorear();
   actualizar(true);
 })();
 </script>
