@@ -116,6 +116,7 @@
     </div>
     <div class="ctls">
       <label class="ctl" for="selTramo">Tramo<select id="selTramo"></select></label>
+      <label class="ctl" for="selEstado">Estado de liberación<select id="selEstado"></select></label>
       <label class="ctl" for="selResp">Responsable<select id="selResp"></select></label>
     </div>
   </div>
@@ -294,7 +295,7 @@
   });
 
   // ---------- filtros ----------
-  const F = { tramo: 'ALL', resp: 'ALL', sem: null };
+  const F = { tramo: 'ALL', resp: 'ALL', estado: 'ALL', sem: null };
   try { const h = decodeURIComponent(location.hash.slice(1)); if (/^T\d+$/.test(h)) F.tramo = h.slice(1); } catch (e) {}
   const nombresTramo = new Map(); TR.forEach((t) => { if (t.tramo_num != null && !nombresTramo.has(t.tramo_num)) nombresTramo.set(t.tramo_num, t.tramo); });
   const selT = document.getElementById('selTramo'), selR = document.getElementById('selResp');
@@ -303,10 +304,18 @@
   selR.add(new Option('Todos los responsables', 'ALL'));
   [...new Set(TR.map((t) => t.responsable).filter(Boolean))].sort().forEach((r) => selR.add(new Option(r, r)));
   if (selR.options.length === 1) selR.add(new Option('(aún sin responsables en la matriz)', 'ALL'));
-  selT.value = F.tramo; selR.value = F.resp;
+  const selE = document.getElementById('selEstado');
+  const ORDEN_EST = ['SIN LIBERAR', 'NO VIABLE', 'EN REVISION', 'LIBERADO EN EJECUCION', 'LIBERADO', 'EJECUTADO'];
+  const ET_EST = { 'SIN LIBERAR': 'Sin liberar', 'NO VIABLE': 'No viable', 'EN REVISION': 'En revisión', 'LIBERADO EN EJECUCION': 'Liberado en ejecución', 'LIBERADO': 'Liberado', 'EJECUTADO': 'Ejecutado' };
+  const etEst = (e) => ET_EST[e] || (e ? e.charAt(0) + e.slice(1).toLowerCase() : 'Sin estado');
+  const cuentaEst = new Map(); TR.forEach((t) => cuentaEst.set(t.estado, (cuentaEst.get(t.estado) || 0) + 1));
+  selE.add(new Option('Todos los estados', 'ALL'));
+  [...cuentaEst.keys()].sort((a, b) => ((ORDEN_EST.indexOf(a) + 1) || 99) - ((ORDEN_EST.indexOf(b) + 1) || 99)).forEach((e) => selE.add(new Option(`${etEst(e)} (${cuentaEst.get(e)})`, e)));
+  selT.value = F.tramo; selR.value = F.resp; selE.value = F.estado;
   selT.addEventListener('change', () => { F.tramo = selT.value; actualizar(true); });
   selR.addEventListener('change', () => { F.resp = selR.value; actualizar(true); });
-  const pasa = (t, conSem = true) => (F.tramo === 'ALL' || String(t.tramo_num) === F.tramo) && (F.resp === 'ALL' || t.responsable === F.resp) && (!conSem || !F.sem || t.sem === F.sem);
+  selE.addEventListener('change', () => { F.estado = selE.value; actualizar(true); });
+  const pasa = (t, conSem = true) => (F.tramo === 'ALL' || String(t.tramo_num) === F.tramo) && (F.resp === 'ALL' || t.responsable === F.resp) && (F.estado === 'ALL' || t.estado === F.estado) && (!conSem || !F.sem || t.sem === F.sem);
 
   // ---------- mapa ----------
   document.getElementById('legend').innerHTML = SEM.map((s) => `<span><i style="background:${COL(s)}"></i>${SEM_ET[s]}</span>`).join('');
@@ -415,7 +424,7 @@
       `<div class="kpi" style="--c:var(--rojo);cursor:default"><div class="l">Compromisos vencidos</div><div class="v ${venc ? 'venc' : ''}">${venc}</div><div class="s">${prox} vencen en los próximos 15 días</div></div>`;
     document.querySelectorAll('.kpi[data-sem]').forEach((b) => b.addEventListener('click', () => { F.sem = F.sem === b.dataset.sem ? null : b.dataset.sem; actualizar(false); }));
     const rojo = ts.filter((t) => t.sem === 'ROJO');
-    document.getElementById('lede').innerHTML = `${F.tramo === 'ALL' ? 'En todos los tramos' : 'En ' + esc(nombresTramo.get(+F.tramo))} hay <b>${rojo.length} tramos en rojo</b> (${fm.format(largo(rojo))} m) y <b>${ts.filter((t) => t.sem === 'AMARILLO').length} en amarillo</b>, de ${ts.length} registrados en la matriz` + (venc ? `; <b class="venc">${venc} compromisos vencidos</b>.` : '.');
+    document.getElementById('lede').innerHTML = `${F.tramo === 'ALL' ? 'En todos los tramos' : 'En ' + esc(nombresTramo.get(+F.tramo))}${F.estado === 'ALL' ? '' : ', con estado <b>' + esc(etEst(F.estado).toLowerCase()) + '</b>,'} hay <b>${rojo.length} tramos en rojo</b> (${fm.format(largo(rojo))} m) y <b>${ts.filter((t) => t.sem === 'AMARILLO').length} en amarillo</b>, de ${ts.length} registrados en la matriz` + (venc ? `; <b class="venc">${venc} compromisos vencidos</b>.` : '.');
   }
 
   // ---------- lista de restricciones ----------
@@ -436,7 +445,7 @@
   // ---------- barras ----------
   function barras() {
     const grupos = [...nombresTramo.keys()].sort((a, b) => a - b).map((n) => {
-      const ts = TR.filter((t) => t.tramo_num === n && (F.resp === 'ALL' || t.responsable === F.resp));
+      const ts = TR.filter((t) => t.tramo_num === n && (F.resp === 'ALL' || t.responsable === F.resp) && (F.estado === 'ALL' || t.estado === F.estado));
       const por = Object.fromEntries(SEM.map((s) => [s, ts.filter((t) => t.sem === s).reduce((a, t) => a + (t.long || 0), 0)]));
       return { n, total: Object.values(por).reduce((a, b) => a + b, 0), por, cuenta: ts.length };
     }).filter((g) => g.cuenta);
