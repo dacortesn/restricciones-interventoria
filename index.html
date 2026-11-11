@@ -56,6 +56,9 @@
   .modo { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
   .modo select { min-width: 0; padding: 5px 8px; font-weight: 500; }
   .legend i.eje { height: 0; border-top: 2px dashed var(--muted); width: 18px; border-radius: 0; }
+  .legend i.abs { width: 8px; height: 8px; border-radius: 50%; background: #fff; border: 1.5px solid #1b2320; }
+  .abs-lbl { font: 600 10px/1 var(--mono); color: #1b2320; white-space: nowrap; pointer-events: none; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff; }
+  .abs-lbl.km { font-size: 11.5px; color: #8a3b12; }
   .legend i.yo { border-radius: 50%; background: var(--yo); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yo) 30%, transparent); }
   #map { height: min(70vh, 660px); min-height: 380px; background: #dde3e0; }
   .note { font-size: 12px; color: var(--muted); padding: 8px 14px; border-top: 1px solid var(--line); }
@@ -139,7 +142,7 @@
           </select>
         </label>
         <div class="legend" id="legend"></div>
-        <div class="legend"><span><i class="eje"></i>Eje del proyecto</span><span><i class="yo"></i>Mi ubicación</span></div>
+        <div class="legend"><span><i class="eje"></i>Eje del proyecto</span><span><i class="abs"></i>Abscisado</span><span><i class="yo"></i>Mi ubicación</span></div>
       </div>
       <div id="map" role="region" aria-label="Mapa de tramos y predios por semáforo"></div>
       <div id="yoInfo" hidden></div>
@@ -346,8 +349,8 @@
     'Satélite (Esri)': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagen © Esri, Maxar, Earthstar Geographics' }),
   };
   base['Calles (OpenStreetMap)'].addTo(map);
-  const gEjes = L.layerGroup().addTo(map), gPred = L.layerGroup().addTo(map), gTr = L.layerGroup().addTo(map), gYo = L.layerGroup().addTo(map);
-  L.control.layers(base, { 'Predios (semáforo del tramo)': gPred, 'Tramos de la matriz': gTr, 'Ejes del proyecto': gEjes }, { collapsed: window.innerWidth < 700 }).addTo(map);
+  const gEjes = L.layerGroup().addTo(map), gPred = L.layerGroup().addTo(map), gTr = L.layerGroup().addTo(map), gAbs = L.layerGroup().addTo(map), gYo = L.layerGroup().addTo(map);
+  L.control.layers(base, { 'Predios (color de su tramo)': gPred, 'Tramos de la matriz': gTr, 'Ejes del proyecto': gEjes, 'Abscisado del proyecto (KML)': gAbs }, { collapsed: window.innerWidth < 700 }).addTo(map);
   L.control.scale({ imperial: false }).addTo(map);
   const ll = (c) => (typeof c[0] === 'number' ? [c[1], c[0]] : c.map(ll));
   const fila = (a, b) => (b ? `<tr><td>${esc(a)}</td><td>${esc(b)}</td></tr>` : '');
@@ -361,6 +364,25 @@
   TR.filter((t) => t.geom).forEach((t) => {
     t._l = L.polyline(ll(t.geom), { color: COL(t.sem), weight: t.vencida ? 9 : 6, opacity: .95, lineCap: 'round', dashArray: t.vencida ? '2 10' : null }).bindPopup(() => popTramo(t), { maxWidth: 380 });
   });
+  // ---------- abscisado del KML: cada 1 km lejos, 500 m a media distancia, 100 m de cerca ----------
+  function abscisado() {
+    gAbs.clearLayers();
+    if (!map.hasLayer(gAbs) || !map._loaded) return;
+    const z = map.getZoom(); if (z < 13) return;
+    const paso = z >= 16 ? 100 : z >= 15 ? 500 : 1000;
+    const caja = map.getBounds().pad(0.2);
+    EJ.forEach((e) => {
+      if (!gEjes.hasLayer(e._l)) return;
+      e.geom.forEach((p) => {
+        const v = p[2];
+        if (v == null || Math.abs(v / paso - Math.round(v / paso)) > 1e-6 || !caja.contains([p[1], p[0]])) return;
+        const km = Math.floor(v / 1000), m = Math.round(v - km * 1000), esKm = m === 0;
+        gAbs.addLayer(L.circleMarker([p[1], p[0]], { radius: esKm ? 4 : 2.5, color: '#1b2320', weight: 1.2, fillColor: '#fff', fillOpacity: 1, interactive: false }));
+        gAbs.addLayer(L.marker([p[1], p[0]], { icon: L.divIcon({ className: 'abs-lbl' + (esKm ? ' km' : ''), html: 'K' + km + '+' + String(m).padStart(3, '0'), iconSize: null, iconAnchor: [-7, 6] }), interactive: false, keyboard: false }));
+      });
+    });
+  }
+  map.on('zoomend moveend overlayadd', abscisado);
   function colorear() {
     PR.forEach((p) => { const c = p.t ? colCat(catDe(p.t)) : COL('SIN DATO'); p._l.setStyle({ color: c, fillColor: c }); });
     TR.forEach((t) => { if (t._l) t._l.setStyle({ color: colCat(catDe(t)) }); });
@@ -378,6 +400,7 @@
     PR.filter((p) => p.t && pasa(p.t)).forEach((p) => gPred.addLayer(p._l));
     TR.filter((t) => t._l && pasa(t)).forEach((t) => gTr.addLayer(t._l));
     if (encuadrar) ajustar();
+    abscisado();
   }
   let pendiente = false;
   function ajustar() {
@@ -391,7 +414,7 @@
     } catch (e) { /* sin geometría para el filtro */ }
   }
   new ResizeObserver(() => { map.invalidateSize(); if (pendiente) ajustar(); }).observe(document.getElementById('map'));
-  const irA = (t) => { if (!t._l) return false; document.getElementById('map').scrollIntoView({ behavior: 'smooth', block: 'center' }); map.fitBounds(t._l.getBounds(), { maxZoom: 18, padding: [40, 40] }); setTimeout(() => t._l.openPopup(), 350); return true; };
+  const irA = (t) => { if (!t._l) return false; document.getElementById('map').scrollIntoView({ behavior: 'smooth', block: 'center' }); map.fitBounds(t._l.getBounds(), { maxZoom: 18, padding: [40, 40], animate: false }); setTimeout(() => t._l.openPopup(), 350); return true; };
 
   // ---------- mi ubicación ----------
   const yoInfo = document.getElementById('yoInfo');
